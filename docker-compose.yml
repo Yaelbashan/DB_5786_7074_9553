@@ -14,6 +14,7 @@ services:
       - "5432:5432"
     volumes:
       - ./init-db:/docker-entrypoint-initdb.d
+      - ./mockarooFiles:/mockarooFiles
       - postgres_data:/var/lib/postgresql/data
     networks:
       - hotel_network

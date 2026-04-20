@@ -1,158 +1,265 @@
+import csv
 import random
-from datetime import date, timedelta
-from faker import Faker
+from datetime import date, datetime, timedelta
+from pathlib import Path
 
-fake = Faker()
+# -----------------------------
+# Config
+# -----------------------------
+BASE_DIR = Path(file).resolve().parent.parent
+MOCKAROO_DIR = BASE_DIR / "mockarooFiles"
+OUTPUT_FILE = BASE_DIR / "Programing" / "generated_stays_payments_feedback.sql"
+
+GUESTS_FILE = MOCKAROO_DIR / "GUEST_MOCK_DATA.csv"
+
+TARGET_STAYS = 200000
+TARGET_PAYMENTS = 200000
+TARGET_FEEDBACK = 200000
+
 random.seed(42)
-Faker.seed(42)
 
-OUTPUT_FILE = "insertTables.sql"
+STAY_STATUSES = ["Booked", "CheckedIn", "CheckedOut", "Cancelled"]
+PAYMENT_METHODS = ["Credit Card", "Cash", "Bank Transfer"]
+PAYMENT_STATUSES = ["Pending", "Completed", "Failed", "Refunded"]
 
-NUM_GUESTS = 20
-PRIVATE_RATIO = 0.7
-MAX_STAYS_PER_GUEST = 3
-
-LOYALTY_TIERS = [
-    (1, "Silver", 0, 5.00, "Basic benefits and entry-level discount"),
-    (2, "Gold", 1000, 10.00, "Priority service and medium discount"),
-    (3, "Platinum", 5000, 15.00, "Premium benefits and maximum discount"),
+FEEDBACK_COMMENTS = [
+    "Excellent stay, very clean room and kind staff.",
+    "Good service and quick check-in.",
+    "Pleasant stay and tasty breakfast.",
+    "Everything was organized and comfortable.",
+    "Nice hotel and convenient location.",
+    "Clean room and professional team.",
+    "Very smooth experience from arrival to checkout.",
+    "Business stay was efficient and quiet.",
+    "Excellent overall hospitality.",
+    "Good value for money.",
+    "Would definitely come back again.",
+    "Friendly staff and easy checkout.",
+    "Corporate booking handled very well.",
+    "Team stay went smoothly.",
+    "Professional and efficient service."
 ]
 
-GENDERS = ["Male", "Female", "Other"]
-STAY_STATUSES = ["CheckedOut", "CheckedIn", "Cancelled", "Booked"]
-LOYALTY_STATUSES = ["Active", "Inactive", "Suspended"]
-
+# -----------------------------
+# Helpers
+# -----------------------------
 def sql_escape(value: str) -> str:
-    if value is None:
-        return "NULL"
     return value.replace("'", "''")
 
-def sql_value(value):
+
+def sql_str(value):
     if value is None:
         return "NULL"
-    if isinstance(value, str):
-        return f"'{sql_escape(value)}'"
-    if isinstance(value, date):
-        return f"'{value.isoformat()}'"
-    return str(value)
+    return f"'{sql_escape(str(value))}'"
 
-def write_insert(file_obj, table_name: str, columns: list[str], rows: list[tuple]):
+
+def read_csv(path: Path):
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        return list(csv.DictReader(f))
+
+
+def write_insert_block(file_obj, table_name: str, columns: list[str], rows: list[tuple], overriding=False):
     if not rows:
         return
 
-    file_obj.write(f"-- Insert data into {table_name}\n")
-    file_obj.write(f"INSERT INTO {table_name} (\n    " + ", ".join(columns) + "\n)\n")
-    file_obj.write("OVERRIDING SYSTEM VALUE\nVALUES\n")
+    file_obj.write(f"-- Insert into {table_name}\n")
+    file_obj.write(f"INSERT INTO {table_name} ({', '.join(columns)}) ")
 
-    value_lines = []
+    if overriding:
+        file_obj.write("OVERRIDING SYSTEM VALUE ")
+
+    file_obj.write("\nVALUES\n")
+
+    values_sql = []
     for row in rows:
-        formatted_values = ", ".join(sql_value(v) for v in row)
-        value_lines.append(f"({formatted_values})")
-    
-    file_obj.write(",\n".join(value_lines))
+        values_sql.append("(" + ", ".join(row) + ")")
+
+    file_obj.write(",\n".join(values_sql))
     file_obj.write(";\n\n")
 
-def generate_loyalty_tiers():
-    return LOYALTY_TIERS
 
-def generate_guests(num_guests: int):
-    guests = []
-    private_guests = []
-    corporate_guests = []
+# -----------------------------
+# Load base guest IDs
+# -----------------------------
+def load_guest_ids():
+    guests = read_csv(GUESTS_FILE)
+    guest_ids = [int(row["guest_id"]) for row in guests]
+    return guest_ids
 
-    for guest_id in range(1, num_guests + 1):
-        guest_type = "private" if random.random() < PRIVATE_RATIO else "corporate"
-        phone = fake.phone_number()[:20]
-        email = fake.unique.email()[:100]
-        created_at = fake.date_between(start_date="-2y", end_date="today")
 
-        guests.append((guest_id, phone, email, created_at))
-
-        if guest_type == "private":
-            first_name = fake.first_name()
-            last_name = fake.last_name()
-            id_number = "".join(random.choices("0123456789", k=9))
-            gender = random.choice(GENDERS)
-            private_guests.append((guest_id, first_name, last_name, id_number, gender))
-        else:
-            company_name = fake.company()[:100]
-            company_reg = "".join(random.choices("0123456789", k=9))
-            contact_person = fake.name()[:100]
-            corporate_guests.append((guest_id, company_name, company_reg, contact_person))
-
-    return guests, private_guests, corporate_guests
-
-def generate_stays(guest_ids: list[int]):
+# -----------------------------
+# Generate STAY_RECORD
+# -----------------------------
+def generate_stays(guest_ids: list[int], target_count: int):
     stays = []
     stay_id = 1
-    for guest_id in guest_ids:
-        num_stays = random.randint(1, MAX_STAYS_PER_GUEST)
-        for _ in range(num_stays):
-            check_in = fake.date_between(start_date="-1y", end_date="today")
-            status = random.choices(STAY_STATUSES, weights=[0.6, 0.2, 0.1, 0.1], k=1)[0]
-            
-            if status in ["Cancelled", "Booked"]:
-                check_out = check_in + timedelta(days=random.randint(1, 5))
-            else:
-                nights = random.randint(1, 7)
-                check_out = check_in + timedelta(days=nights)
 
-            stays.append((stay_id, check_in, check_out, status, guest_id))
-            stay_id += 1
+    start_date = date(2024, 1, 1)
+    end_date = date(2026, 12, 31)
+    total_days = (end_date - start_date).days
+
+    while len(stays) < target_count:
+        guest_id = random.choice(guest_ids)
+
+        check_in = start_date + timedelta(days=random.randint(0, total_days))
+        nights = random.randint(1, 7)
+        check_out = check_in + timedelta(days=nights)
+
+        status = random.choices(
+            STAY_STATUSES,
+            weights=[20, 10, 60, 10],  # Booked, CheckedIn, CheckedOut, Cancelled
+            k=1
+        )[0]
+
+        stays.append((
+            str(stay_id),
+            sql_str(check_in.isoformat()),
+            sql_str(check_out.isoformat()),
+            sql_str(status),
+            str(guest_id),
+        ))
+
+        stay_id += 1
+
     return stays
 
-def generate_feedback(stays: list[tuple]):
+
+# -----------------------------
+# Generate PAYMENT
+# -----------------------------
+def generate_payments(stays: list[tuple], target_count: int):
+    payments = []
+    payment_id = 1
+
+    selected_stays = stays[:target_count]
+
+    for stay in selected_stays:
+        stay_id = int(stay[0])
+        check_in_date = stay[1].strip("'")
+        stay_status = stay[3].strip("'")
+
+        payment_date = datetime.strptime(check_in_date, "%Y-%m-%d") + timedelta(
+            hours=random.randint(8, 18),
+            minutes=random.randint(0, 59)
+        )
+
+        method = random.choice(PAYMENT_METHODS)
+        if stay_status == "Cancelled":
+            pay_status = "Refunded"
+            amount = round(random.uniform(50.00, 400.00), 2)
+        elif stay_status == "Booked":
+            pay_status = "Pending"
+            amount = round(random.uniform(150.00, 600.00), 2)
+        elif stay_status == "CheckedIn":
+            pay_status = "Pending"
+            amount = round(random.uniform(300.00, 1500.00), 2)
+        else:
+            pay_status = "Completed"
+            amount = round(random.uniform(300.00, 2500.00), 2)
+
+        payments.append((
+            str(payment_id),
+            sql_str(payment_date.strftime("%Y-%m-%d %H:%M:%S")),
+            str(amount),
+            sql_str(method),
+            sql_str(pay_status),
+            str(stay_id),
+        ))
+
+        payment_id += 1
+
+    return payments
+
+
+# -----------------------------
+# Generate GUEST_FEEDBACK
+# -----------------------------
+def generate_feedback(stays: list[tuple], target_count: int):
+    """
+    In your schema:
+    GUEST_FEEDBACK(stay_id PRIMARY KEY, ...)
+    So only one feedback per stay is allowed.
+    To reach 200000 feedback rows, we generate feedback for 200000 different stays.
+    """
     feedback = []
-    for stay in stays:
-        stay_id, check_in, check_out, status, guest_id = stay
-        if status == "CheckedOut" and random.random() < 0.65:
+
+    eligible_stays = [
+        stay for stay in stays
+        if stay[3].strip("'") in ["CheckedOut", "CheckedIn", "Booked", "Cancelled"]
+    ]
+
+    selected_stays = eligible_stays[:target_count]
+
+    for stay in selected_stays:
+        stay_id = int(stay[0])
+        check_out_date = datetime.strptime(stay[2].strip("'"), "%Y-%m-%d").date()
+
+        if stay[3].strip("'") == "Cancelled":
+            rating = random.randint(1, 3)
+        elif stay[3].strip("'") == "Booked":
+            rating = random.randint(3, 4)
+        else:
             rating = random.randint(3, 5)
-            comments = random.choice([
-                "Very satisfied with the service",
-                "Room was clean and comfortable",
-                "Great stay, would return again",
-                "Breakfast was good, staff was helpful",
-                "Overall positive experience",
-            ])
-            feedback_date = check_out if check_out else date.today()
-            feedback.append((stay_id, rating, comments, feedback_date))
+
+        comments = random.choice(FEEDBACK_COMMENTS)
+        feedback_date = check_out_date
+
+        feedback.append((
+            str(stay_id),
+            str(rating),
+            sql_str(comments),
+            sql_str(feedback_date.isoformat()),
+        ))
+
     return feedback
 
-def generate_guest_loyalty(guest_ids: list[int]):
-    guest_loyalty = []
-    used_membership_numbers = set()
-    for guest_id in guest_ids:
-        if random.random() < 0.6:
-            tier_id = random.choice([1, 2, 3])
-            points_balance = {1: random.randint(0, 999), 2: random.randint(1000, 4999), 3: random.randint(5000, 12000)}[tier_id]
-            membership_number = "".join(random.choices("0123456789", k=8))
-            while membership_number in used_membership_numbers:
-                membership_number = "".join(random.choices("0123456789", k=8))
-            used_membership_numbers.add(membership_number)
-            status = random.choices(LOYALTY_STATUSES, weights=[0.8, 0.1, 0.1], k=1)[0]
-            guest_loyalty.append((guest_id, membership_number, points_balance, status, tier_id))
-    return guest_loyalty
 
+# -----------------------------
+# Main
+# -----------------------------
 def main():
-    tiers = generate_loyalty_tiers()
-    guests, private_guests, corporate_guests = generate_guests(NUM_GUESTS)
-    guest_ids = [g[0] for g in guests]
-    stays = generate_stays(guest_ids)
-    feedback = generate_feedback(stays)
-    loyalty = generate_guest_loyalty(guest_ids)
+    guest_ids = load_guest_ids()
+
+    stays = generate_stays(guest_ids, TARGET_STAYS)
+    payments = generate_payments(stays, TARGET_PAYMENTS)
+    feedback = generate_feedback(stays, TARGET_FEEDBACK)
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        f.write("-- Auto-generated insert data for Hotel Guest Management module\n\n")
+        f.write("-- ======================================\n")
+        f.write("-- AUTO GENERATED DATA BASED ON MOCKAROO\n")
+        f.write("-- Tables: STAY_RECORD, PAYMENT, GUEST_FEEDBACK\n")
+        f.write("-- ======================================\n\n")
 
-        write_insert(f, "LOYALTY_TIER", ["tier_id", "tier_name", "points_required", "discount_percentage", "benefits_description"], tiers)
-        write_insert(f, "GUEST", ["guest_id", "phone", "email", "created_at"], guests)
-        write_insert(f, "PRIVATE_GUEST", ["guest_id", "first_name", "last_name", "id_or_passport_number", "gender"], private_guests)
-        write_insert(f, "CORPORATE_GUEST", ["guest_id", "company_name", "company_registration_number", "contact_person_name"], corporate_guests)
-        write_insert(f, "GUEST_LOYALTY", ["guest_id", "membership_number", "points_balance", "status", "tier_id"], loyalty)
-        write_insert(f, "STAY_RECORD", ["stay_id", "check_in_date", "check_out_date", "stay_status", "guest_id"], stays)
-        write_insert(f, "GUEST_FEEDBACK", ["stay_id", "rating", "comments", "feedback_date"], feedback)
+        write_insert_block(
+            f,
+            "STAY_RECORD",
+            ["stay_id", "check_in_date", "check_out_date", "stay_status", "guest_id"],
+            stays,
+            overriding=True
+        )
 
-    print(f"Done. Created {OUTPUT_FILE}")
+        write_insert_block(
+            f,
+            "PAYMENT",
+            ["payment_id", "payment_date", "amount", "payment_method", "payment_status", "stay_id"],
+            payments,
+            overriding=True
+        )
 
-if __name__ == "__main__":
+        write_insert_block(
+            f,
+            "GUEST_FEEDBACK",
+            ["stay_id", "rating", "comments", "feedback_date"],
+            feedback,
+            overriding=False
+        )
+
+    print("Done.")
+    print(f"Created file: {OUTPUT_FILE}")
+    print(f"STAY_RECORD rows: {len(stays)}")
+    print(f"PAYMENT rows: {len(payments)}")
+    print(f"GUEST_FEEDBACK rows: {len(feedback)}")
+
+
+if name == "main":
     main()
